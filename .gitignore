@@ -1,0 +1,27 @@
+# OS & editor metadata
+.DS_Store
+Thumbs.db
+*.swp
+*~
+
+# Environment & secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.sqlite3
+
+# Local preview & node tooling
+node_modules/
+*.log
+
+# AI agent & platform export clutter
+.claude/
+.agents/
+.cursor/
+gstack/
+attached_assets/
+mockup-sandbox/
+archive/

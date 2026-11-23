@@ -1,0 +1,95 @@
+name: Verify Static Artifact
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify-artifact:
+    name: HTML · CSP · Link & Sitemap Integrity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Verify EN/FR/ES pages, strict CSP, CNAME, sitemap, and local assets
+        run: |
+          node --input-type=module - <<'EOF'
+          import assert from "node:assert/strict";
+          import { existsSync, readFileSync } from "node:fs";
+          import { dirname, resolve } from "node:path";
+
+          const root = process.cwd();
+          const expectedCsp =
+            "default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; base-uri 'self'; form-action 'none'";
+
+          assert.equal(readFileSync("CNAME", "utf8").trim(), "seen.creova.one", "CNAME must match seen.creova.one");
+          assert.ok(existsSync(".nojekyll"), ".nojekyll must be present for GitHub Pages");
+          assert.ok(existsSync("styles.css") && readFileSync("styles.css", "utf8").length > 100, "styles.css must exist");
+          assert.ok(existsSync("site.js") && readFileSync("site.js", "utf8").length > 100, "site.js must exist");
+
+          const pages = [
+            "index.html",
+            "terms/index.html",
+            "privacy/index.html",
+            "fr/index.html",
+            "fr/terms/index.html",
+            "fr/privacy/index.html",
+            "es/index.html",
+            "es/terms/index.html",
+            "es/privacy/index.html",
+          ];
+
+          for (const page of pages) {
+            assert.ok(existsSync(page), `Missing expected route: ${page}`);
+            const html = readFileSync(page, "utf8");
+            assert.ok(
+              html.includes(`<meta http-equiv="Content-Security-Policy" content="${expectedCsp}" />`),
+              `${page} is missing exact strict Content-Security-Policy`,
+            );
+            assert.ok(
+              html.includes('<meta name="referrer" content="strict-origin-when-cross-origin" />'),
+              `${page} is missing strict-origin-when-cross-origin referrer policy`,
+            );
+            assert.equal(/\son[a-z]+\s*=/i.test(html), false, `${page} must not contain inline event handlers`);
+
+            for (const match of html.matchAll(/\b(?:src|href)="([^"]+)"/g)) {
+              const ref = match[1];
+              if (
+                ref.startsWith("#") ||
+                ref.startsWith("mailto:") ||
+                ref.startsWith("https://seen.creova.one") ||
+                ref.startsWith("https://creova.one") ||
+                ref.startsWith("https://seen-sigma-eight.vercel.app")
+              ) {
+                continue;
+              }
+              assert.equal(/^https?:/i.test(ref), false, `${page} references unexpected external URL: ${ref}`);
+              const clean = ref.split("#")[0].split("?")[0];
+              const target = resolve(dirname(resolve(root, page)), clean);
+              const exists = existsSync(target) || existsSync(resolve(target, "index.html"));
+              assert.ok(exists, `${page} has broken relative asset/route reference: ${ref}`);
+            }
+          }
+
+          const sitemap = readFileSync("sitemap.xml", "utf8");
+          const locs = [...sitemap.matchAll(/<loc>([^<]+)<\/loc>/g)].map((m) => m[1]);
+          assert.equal(locs.length, 9, "sitemap.xml must list all 9 EN/FR/ES routes");
+          for (const loc of locs) {
+            assert.ok(loc.startsWith("https://seen.creova.one/"), `Unexpected sitemap host: ${loc}`);
+            const rel = loc.replace("https://seen.creova.one/", "");
+            const target = rel === "" ? "index.html" : `${rel.replace(/\/$/, "")}/index.html`;
+            assert.ok(existsSync(target), `Sitemap entry missing on disk: ${loc} -> ${target}`);
+          }
+
+          console.log(`Verified ${pages.length} HTML routes, strict CSP, CNAME, assets, and ${locs.length} sitemap URLs.`);
+          EOF
